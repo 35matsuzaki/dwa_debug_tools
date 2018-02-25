@@ -6,57 +6,81 @@ from sensor_msgs.msg import PointCloud2, PointField
 import sensor_msgs.point_cloud2 as pc2
 from dwa_debug_tools.msg import EvaluationDataBase
 from dwa_debug_tools.msg import EvaluationValue
-
-RANGE_X0 = -1 # min col x
-RANGE_X1 = 11 # max col x
-RANGE_Y0 = -1 # min row y
-RANGE_Y1 = 13 # max row y
-MESH_SIZE = 0.1 #[m]
-FILE_NAME = "/home/effinger/ws_w1/src/magnetic_localization_ros/maps/10cm/mag_map.txt"
+from visualization_msgs.msg import Marker
+from visualization_msgs.msg import MarkerArray
 
 
-# 点の座標を定義するフレームの名前
-HEADER = Header(frame_id='base')
-
-# PointCloud2のフィールドの一覧
 FIELDS = [
-    # 点の座標(x, y, z)
     PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
     PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
     PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
-    # 点の色(RGB)
-    # 赤: 0xff0000, 緑:0x00ff00, 青: 0x0000ff
-    # PointField(name='rgb', offset=12, datatype=PointField.UINT32, count=1),
-    # 独自に定義したフィールド
-    # 例えば点の確からしさとか、観測時刻とか
     PointField(name='totalEval', offset=12, datatype=PointField.FLOAT32, count=1),
     PointField(name='distEval', offset=16, datatype=PointField.FLOAT32, count=1),
     PointField(name='timeEval', offset=20, datatype=PointField.FLOAT32, count=1),
-    # PointField(name='my_field2', offset=20, datatype=PointField.FLOAT32, count=1),
 ]
-
-def drange(begin, end, step):
-    n = begin
-    while n+step < end:
-        yield n
-        n += step
-
 
 class CustomPointCloud(object):
     def __init__(self):
         rospy.init_node('publish_custom_point_cloud')
-        self.publisher = rospy.Publisher('/custom_point_cloud', PointCloud2, queue_size=1)
+        self.pubDw = rospy.Publisher('/dynamic_window', PointCloud2, queue_size=1)
+        self.pubDwaCmd = rospy.Publisher('/dwa_cmd_vel', MarkerArray, queue_size=1)
         self.subscriver = rospy.Subscriber("/dwa_eval", EvaluationDataBase, self.onDWAEvalMsg)
-
+        self.frameId = 'base'
 
     def onDWAEvalMsg(self, evalDB):
         self.POINTS = [[]]
+
+        markerArray = MarkerArray()
+        maxTotalInput = []
+        maxTimeInput = []
+        maxDistInput = []
+        maxTotalEval = 0.0
+        maxTimeEval = 0.0
+        maxDistEval = 0.0
         for i in range(len(evalDB.value)):
             self.POINTS.append([evalDB.value[i].vx, evalDB.value[i].vy, 0.0, evalDB.value[i].totalEval, evalDB.value[i].distEval, evalDB.value[i].timeEval])
+            if maxTotalEval < evalDB.value[i].totalEval:
+                maxTotalEval = evalDB.value[i].totalEval
+                maxTotalInput = [evalDB.value[i].vx, evalDB.value[i].vy]
+            if maxTimeEval < evalDB.value[i].timeEval:
+                maxTimeEval = evalDB.value[i].timeEval
+                maxTimeInput = [evalDB.value[i].vx, evalDB.value[i].vy]
+            if maxDistEval < evalDB.value[i].distEval:
+                maxDistEval = evalDB.value[i].distEval
+                maxDistInput = [evalDB.value[i].vx, evalDB.value[i].vy]
+
         del self.POINTS[0]
 
+        HEADER = Header(frame_id=self.frameId)
         point_cloud = pc2.create_cloud(HEADER, FIELDS, self.POINTS)
-        self.publisher.publish(point_cloud)
+        self.pubDw.publish(point_cloud)
+
+        self.setMarker(maxTotalInput, markerArray, [1,1,0])
+        self.setMarker(maxTimeInput, markerArray, [1,1,1])
+        self.setMarker(maxDistInput, markerArray, [0,0,0])
+        self.pubDwaCmd.publish(markerArray)
+
+
+
+    def setMarker(self, maxInput, markerArray, color):
+        marker = Marker()
+        marker.header.frame_id = self.frameId
+        marker.type = marker.SPHERE
+        marker.action = marker.ADD
+        marker.id = len(markerArray.markers)
+        marker.scale.x = 0.1
+        marker.scale.y = 0.1
+        marker.scale.z = 0.1
+        marker.color.a = 1.0
+        marker.color.r = color[0]
+        marker.color.g = color[1]
+        marker.color.b = color[2]
+        marker.pose.orientation.w = 1.0
+        marker.pose.position.x = maxInput[0]
+        marker.pose.position.y = maxInput[1]
+        marker.pose.position.z = 0.0
+        markerArray.markers.append(marker)
+
 
 
 def main():
